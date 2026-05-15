@@ -1,0 +1,477 @@
+datasource db {
+  provider = "mongodb"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -----------------------------------------------------------------------------
+// ENUMS
+// -----------------------------------------------------------------------------
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  VENDOR
+  AGENCY_OWNER
+  AGENCY_STAFF
+}
+
+enum Category {
+  UMRAH
+  VISA
+  ATTESTATION
+  HOTEL
+  TRANSPORT
+}
+
+enum KycStatus {
+  PENDING
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum ListingStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+enum EnquiryStatus {
+  OPEN
+  DRAFT_CREATED
+  QUOTED
+  CONVERTED
+  LOST
+}
+
+enum DraftStatus {
+  DRAFT
+  SENT
+  EXPIRED
+  CONVERTED
+}
+
+enum BookingStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  COMPLETED
+  CANCELLED
+  REFUNDED
+}
+
+enum PipelineStage {
+  LEAD // Added for Customer CRM
+  ENQUIRY
+  BOOKING_CREATED
+  DOCS_SUBMITTED
+  PROCESSING
+  COMPLETED
+  BOOKING // Added for Customer CRM
+}
+
+enum TransactionType {
+  CREDIT
+  DEBIT
+  ESCROW_HOLD
+  ESCROW_RELEASE
+  REFUND
+  COMMISSION
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REVERSED
+}
+
+enum EscrowStatus {
+  HELD
+  RELEASED
+  REFUNDED
+  DISPUTED
+}
+
+enum DocumentReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum InvoiceType {
+  BOOKING
+  WALLET_RECHARGE
+  COMMISSION
+  REFUND
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PAID
+  VOID
+}
+
+enum NotificationType {
+  BOOKING
+  DOCUMENT
+  PAYMENT
+  STATUS_CHANGE
+  SYSTEM
+}
+
+enum NotificationChannel {
+  IN_APP
+  WHATSAPP
+  EMAIL
+}
+
+enum DeliveryStatus {
+  PENDING
+  SENT
+  DELIVERED
+  FAILED
+}
+
+// -----------------------------------------------------------------------------
+// TYPES (Embedded Documents)
+// -----------------------------------------------------------------------------
+
+type KycDocument {
+  key        String
+  type       String
+  uploadedAt DateTime @default(now())
+}
+
+type Address {
+  street  String?
+  city    String?
+  country String?
+}
+
+type RequiredDocument {
+  name        String
+  mandatory   Boolean
+  description String?
+}
+
+type DraftItem {
+  listingId    String   @db.ObjectId
+  qty          Int
+  vendorPrice  Float
+  agencyMargin Float
+  totalPrice   Float
+}
+
+type InvoiceLineItem {
+  description String
+  qty         Int
+  unitPrice   Float
+  total       Float
+}
+
+// -----------------------------------------------------------------------------
+// MODELS
+// -----------------------------------------------------------------------------
+
+model User {
+  id              String    @id @default(auto()) @map("_id") @db.ObjectId
+  email           String    @unique
+  passwordHash    String
+  role            Role
+  firstName       String
+  lastName        String
+  phone           String?
+  isActive        Boolean   @default(true)
+  isEmailVerified Boolean   @default(false)
+  vendorId        String?   @db.ObjectId
+  agencyId        String?   @db.ObjectId
+  lastLoginAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  vendor           Vendor?          @relation(fields: [vendorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  agency           Agency?          @relation(fields: [agencyId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  enquiriesCreated Enquiry[]
+  approvedListings ServiceListing[] @relation("ApprovedListings")
+  releasedEscrows  EscrowLedger[]   @relation("ReleasedEscrows")
+  reviewedDocs     Document[]       @relation("ReviewedDocs")
+  notifications    Notification[]
+  auditLogs        AuditLog[]
+}
+
+model Vendor {
+  id              String         @id @default(auto()) @map("_id") @db.ObjectId
+  businessName    String
+  slug            String         @unique
+  category        Category[]
+  kycStatus       KycStatus      @default(PENDING)
+  kycDocuments    KycDocument[]
+  contactEmail    String
+  contactPhone    String
+  address         Address?
+  bankDetails     String?        // Encrypted JSON
+  isActive        Boolean        @default(false)
+  rating          Float          @default(0)
+  slaBreachCount  Int            @default(0)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  users           User[]
+  listings        ServiceListing[]
+  bookings        Booking[]
+  escrowLedgers   EscrowLedger[]
+}
+
+model Agency {
+  id              String    @id @default(auto()) @map("_id") @db.ObjectId
+  businessName    String
+  slug            String    @unique
+  licenseNumber   String?   @unique
+  contactEmail    String
+  contactPhone    String
+  walletBalance   Float     @default(0)
+  creditLimit     Float     @default(0)
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  users              User[]
+  enquiries          Enquiry[]
+  draftPackages      DraftPackage[]
+  bookings           Booking[]
+  customers          Customer[]
+  walletTransactions WalletTransaction[]
+  escrowLedgers      EscrowLedger[]
+  documents          Document[]
+  invoices           Invoice[]
+}
+
+model ServiceListing {
+  id                  String             @id @default(auto()) @map("_id") @db.ObjectId
+  vendorId            String             @db.ObjectId
+  category            Category
+  title               String
+  description         String?
+  destinationCountry  String
+  inclusions          String[]
+  requiredDocuments   RequiredDocument[]
+  basePrice           Float
+  currency            String             @default("USD")
+  slaDays             Int
+  status              ListingStatus      @default(DRAFT)
+  approvedBy          String?            @db.ObjectId
+  approvedAt          DateTime?
+  inventoryCount      Int?
+  tags                String[]
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  vendor              Vendor             @relation(fields: [vendorId], references: [id])
+  approver            User?              @relation("ApprovedListings", fields: [approvedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  bookings            Booking[]
+}
+
+model Enquiry {
+  id              String         @id @default(auto()) @map("_id") @db.ObjectId
+  agencyId        String         @db.ObjectId
+  customerId      String?        @db.ObjectId
+  title           String
+  status          EnquiryStatus  @default(OPEN)
+  notes           String?
+  createdBy       String         @db.ObjectId
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  agency          Agency         @relation(fields: [agencyId], references: [id])
+  customer        Customer?      @relation(fields: [customerId], references: [id])
+  creator         User           @relation(fields: [createdBy], references: [id])
+  draftPackages   DraftPackage[]
+}
+
+model DraftPackage {
+  id              String        @id @default(auto()) @map("_id") @db.ObjectId
+  enquiryId       String        @db.ObjectId
+  agencyId        String        @db.ObjectId
+  version         Int           @default(1)
+  title           String
+  items           DraftItem[]
+  subtotal        Float
+  marginTotal     Float
+  grandTotal      Float
+  quotationPdfKey String?
+  whatsappSent    Boolean       @default(false)
+  expiresAt       DateTime?
+  status          DraftStatus   @default(DRAFT)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  enquiry         Enquiry       @relation(fields: [enquiryId], references: [id])
+  agency          Agency        @relation(fields: [agencyId], references: [id])
+  bookings        Booking[]
+}
+
+model Booking {
+  id                  String         @id @default(auto()) @map("_id") @db.ObjectId
+  bookingRef          String         @unique
+  agencyId            String         @db.ObjectId
+  customerId          String         @db.ObjectId
+  draftPackageId      String?        @db.ObjectId
+  listingId           String         @db.ObjectId
+  vendorId            String         @db.ObjectId
+  quantity            Int
+  vendorPrice         Float
+  agencyMargin        Float
+  platformCommission  Float
+  totalAmount         Float
+  escrowAmount        Float
+  status              BookingStatus  @default(PENDING)
+  pipelineStage       PipelineStage  @default(BOOKING_CREATED)
+  notes               String?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  agency              Agency         @relation(fields: [agencyId], references: [id])
+  customer            Customer       @relation(fields: [customerId], references: [id])
+  draftPackage        DraftPackage?  @relation(fields: [draftPackageId], references: [id])
+  listing             ServiceListing @relation(fields: [listingId], references: [id])
+  vendor              Vendor         @relation(fields: [vendorId], references: [id])
+  escrowLedger        EscrowLedger?
+  documents           Document[]
+  invoices            Invoice[]
+}
+
+model Customer {
+  id              String        @id @default(auto()) @map("_id") @db.ObjectId
+  agencyId        String        @db.ObjectId
+  firstName       String
+  lastName        String
+  email           String?
+  phone           String
+  nationality     String?
+  passportNumber  String?       // Encrypted
+  passportExpiry  DateTime?
+  dateOfBirth     DateTime?
+  tags            String[]
+  pipelineStage   PipelineStage @default(LEAD)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  agency          Agency        @relation(fields: [agencyId], references: [id])
+  enquiries       Enquiry[]
+  bookings        Booking[]
+  documents       Document[]
+}
+
+model WalletTransaction {
+  id              String            @id @default(auto()) @map("_id") @db.ObjectId
+  agencyId        String            @db.ObjectId
+  type            TransactionType
+  amount          Float
+  balanceBefore   Float
+  balanceAfter    Float
+  referenceType   String?
+  referenceId     String?           @db.ObjectId
+  description     String
+  status          TransactionStatus @default(PENDING)
+  createdAt       DateTime          @default(now())
+
+  agency          Agency            @relation(fields: [agencyId], references: [id])
+}
+
+model EscrowLedger {
+  id              String        @id @default(auto()) @map("_id") @db.ObjectId
+  bookingId       String        @unique @db.ObjectId
+  agencyId        String        @db.ObjectId
+  vendorId        String        @db.ObjectId
+  amount          Float
+  commission      Float
+  status          EscrowStatus  @default(HELD)
+  heldAt          DateTime      @default(now())
+  releasedAt      DateTime?
+  releasedBy      String?       @db.ObjectId
+
+  booking         Booking       @relation(fields: [bookingId], references: [id])
+  agency          Agency        @relation(fields: [agencyId], references: [id])
+  vendor          Vendor        @relation(fields: [vendorId], references: [id])
+  releaser        User?         @relation("ReleasedEscrows", fields: [releasedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model Document {
+  id              String               @id @default(auto()) @map("_id") @db.ObjectId
+  bookingId       String               @db.ObjectId
+  customerId      String               @db.ObjectId
+  agencyId        String               @db.ObjectId
+  type            String
+  name            String
+  s3Key           String               @unique
+  s3Bucket        String
+  mimeType        String
+  fileSizeBytes   Int
+  reviewStatus    DocumentReviewStatus @default(PENDING)
+  reviewedBy      String?              @db.ObjectId
+  reviewNote      String?
+  uploadedAt      DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  booking         Booking              @relation(fields: [bookingId], references: [id])
+  customer        Customer             @relation(fields: [customerId], references: [id])
+  agency          Agency               @relation(fields: [agencyId], references: [id])
+  reviewer        User?                @relation("ReviewedDocs", fields: [reviewedBy], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model Invoice {
+  id              String          @id @default(auto()) @map("_id") @db.ObjectId
+  invoiceNumber   String          @unique
+  agencyId        String          @db.ObjectId
+  bookingId       String?         @db.ObjectId
+  type            InvoiceType
+  lineItems       InvoiceLineItem[]
+  subtotal        Float
+  taxAmount       Float           @default(0)
+  totalAmount     Float
+  status          InvoiceStatus   @default(DRAFT)
+  s3Key           String?
+  issuedAt        DateTime?
+  dueAt           DateTime?
+  createdAt       DateTime        @default(now())
+
+  agency          Agency          @relation(fields: [agencyId], references: [id])
+  booking         Booking?        @relation(fields: [bookingId], references: [id])
+}
+
+model Notification {
+  id              String               @id @default(auto()) @map("_id") @db.ObjectId
+  userId          String               @db.ObjectId
+  type            NotificationType
+  channel         NotificationChannel
+  title           String
+  message         String
+  referenceId     String?              @db.ObjectId
+  isRead          Boolean              @default(false)
+  deliveryStatus  DeliveryStatus       @default(PENDING)
+  createdAt       DateTime             @default(now())
+
+  user            User                 @relation(fields: [userId], references: [id])
+}
+
+model AuditLog {
+  id              String      @id @default(auto()) @map("_id") @db.ObjectId
+  userId          String      @db.ObjectId
+  action          String
+  entityType      String
+  entityId        String      @db.ObjectId
+  oldValue        Json?       
+  newValue        Json?       
+  ipAddress       String?
+  userAgent       String?
+  createdAt       DateTime    @default(now())
+
+  user            User        @relation(fields: [userId], references: [id])
+}
